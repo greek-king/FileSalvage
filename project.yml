@@ -3,8 +3,11 @@ options:
   bundleIdPrefix: com.yourcompany
   deploymentTarget:
     iOS: "16.0"
-  xcodeVersion: "15"
+  xcodeVersion: "14"
+  xcodeCompatibilityVersion: "Xcode 14.0"
   createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: true
 
 settings:
   base:
@@ -40,14 +43,8 @@ targets:
         type: group
       - path: Resources
         type: group
-        buildPhase: resources
-        includes:
-          - "**/*.plist"
-          - "**/*.xcassets"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yourcompany.filesalvage
         INFOPLIST_FILE: Resources/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    info:
-      path: Resources/Info.plist
