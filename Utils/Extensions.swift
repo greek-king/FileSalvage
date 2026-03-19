@@ -1,8 +1,9 @@
 // Utils/Extensions.swift
 // Shared utilities, extensions, and custom UI components
-import Photos   // ← this was missing, caused the error
-import UIKit
+
 import SwiftUI
+import Photos
+import UIKit
 
 // MARK: - Color from Hex
 extension Color {
@@ -64,12 +65,12 @@ struct PermissionHelper {
 
     static var photosAuthorizationStatus: String {
         switch PHPhotoLibrary.authorizationStatus(for: .readWrite) {
-        case .authorized:  return "Authorized"
-        case .denied:      return "Denied"
-        case .limited:     return "Limited"
+        case .authorized:    return "Authorized"
+        case .denied:        return "Denied"
+        case .limited:       return "Limited"
         case .notDetermined: return "Not Determined"
-        case .restricted:  return "Restricted"
-        @unknown default:  return "Unknown"
+        case .restricted:    return "Restricted"
+        @unknown default:    return "Unknown"
         }
     }
 }
