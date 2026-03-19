@@ -1,17 +1,20 @@
-name: Build iOS App
+name: Build iOS IPA
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  build:
+  build-ipa:
     runs-on: macos-14
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Select Xcode 16
         run: |
@@ -24,48 +27,135 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 
-      - name: Build for iOS Simulator
+      - name: Install Apple Certificate
+        env:
+          P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+        run: |
+          # Create temp keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=temppassword123
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          echo "$P12_BASE64" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security import "$RUNNER_TEMP/cert.p12" \
+            -P "$P12_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          # Add to search list
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+      - name: Install Provisioning Profile
+        env:
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          PROFILE_PATH=$RUNNER_TEMP/profile.mobileprovision
+          echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          # Get UUID from profile
+          UUID=$(security cms -D -i "$PROFILE_PATH" | \
+            plutil -extract UUID raw -)
+          echo "Profile UUID: $UUID"
+          echo "PROFILE_UUID=$UUID" >> $GITHUB_ENV
+
+          # Install profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PROFILE_PATH" \
+            ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID.mobileprovision"
+
+      - name: Build Archive
+        env:
+          BUNDLE_ID: ${{ secrets.BUNDLE_ID }}
         run: |
           xcodebuild \
             -project FileSalvage.xcodeproj \
             -scheme FileSalvage \
-            -destination 'platform=iOS Simulator,name=iPhone 16,OS=18.2' \
-            -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            clean build \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -archivePath $RUNNER_TEMP/FileSalvage.xcarchive \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            PROVISIONING_PROFILE="$PROFILE_UUID" \
+            CODE_SIGN_STYLE=Manual \
+            archive \
             2>&1 | tee build.log
-          if grep -q "BUILD SUCCEEDED" build.log; then
-            echo "✅ Build succeeded!"
+          if grep -q "ARCHIVE SUCCEEDED" build.log; then
+            echo "✅ Archive succeeded!"
           else
-            echo "❌ Build failed."
+            echo "❌ Archive failed."
+            cat build.log
             exit 1
           fi
 
-      - name: Archive .app
-        if: success()
+      - name: Create ExportOptions.plist
         run: |
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "FileSalvage.app" -type d 2>/dev/null | head -1)
-          if [ -n "$APP_PATH" ]; then
-            mkdir -p artifacts
-            cp -r "$APP_PATH" artifacts/
-            cd artifacts && zip -r ../FileSalvage-Simulator.zip FileSalvage.app
+          cat > $RUNNER_TEMP/ExportOptions.plist << PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${{ secrets.BUNDLE_ID }}</key>
+              <string>${{ env.PROFILE_UUID }}</string>
+            </dict>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>thinning</key>
+            <string>&lt;none&gt;</string>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Export IPA
+        run: |
+          xcodebuild \
+            -exportArchive \
+            -archivePath $RUNNER_TEMP/FileSalvage.xcarchive \
+            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
+            -exportPath $RUNNER_TEMP/export \
+            2>&1 | tee export.log
+          if grep -q "EXPORT SUCCEEDED" export.log; then
+            echo "✅ Export succeeded!"
+          else
+            echo "❌ Export failed."
+            cat export.log
+            exit 1
           fi
 
-      - name: Upload build artifact
-        if: success()
-        uses: actions/upload-artifact@v4
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4.6.2
         with:
-          name: FileSalvage-Simulator-Build
-          path: FileSalvage-Simulator.zip
+          name: FileSalvage-IPA
+          path: ${{ runner.temp }}/export/*.ipa
           retention-days: 14
 
       - name: Upload build log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: build-log
-          path: build.log
+          path: |
+            build.log
+            export.log
           retention-days: 7
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
