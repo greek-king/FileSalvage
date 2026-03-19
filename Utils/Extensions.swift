@@ -1,6 +1,7 @@
 // Utils/Extensions.swift
 // Shared utilities, extensions, and custom UI components
-
+import Photos   // ← this was missing, caused the error
+import UIKit
 import SwiftUI
 
 // MARK: - Color from Hex
